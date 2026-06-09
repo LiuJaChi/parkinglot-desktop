@@ -6,7 +6,7 @@
 車號為空白/NAN/nan/null 的記錄 - 完全忽略不顯示
 支持匯入格式: Excel (.xlsx, .xls) 和 CSV (.csv)
 支持輸出格式: PDF 報表
-統計方式: 相同車牌一天只算一次，相同身份一天只算一次（按車子數量而非次數）
+統計方式: 身份統計按不重複車輛數量計算
 
 依賴庫：openpyxl, pillow, reportlab
 """
@@ -569,7 +569,7 @@ class VehicleImporter:
         return results
 
     def get_statistics(self, start_date: str = "", end_date: str = "") -> Dict[str, Any]:
-        """獲取統計資訊 - 相同車牌每天只算一次，相同身份每天只算一次"""
+        """✅ 修正: 身份統計按不重複車輛數量計算"""
         records_to_analyze = []
         if start_date or end_date:
             for record in self.records:
@@ -590,20 +590,24 @@ class VehicleImporter:
         if not records_to_analyze:
             return {
                 "total": 0, "no_entry_total": 0, "entry_total": 0, "warning_total": 0,
-                "no_entry_vehicles": {}, "no_entry_identities": {}, 
+                "no_entry_vehicles": {}, "no_entry_identities": {}, "no_entry_last_time": {},
                 "entry_vehicles": {}, "entry_identities": {},
                 "warning_identities": {},
                 "date_range": (start_date, end_date)
             }
 
-        # ✅ 修正: 統計邏輯 - 使用集合去除重複 (相同車牌同天只計一次，相同身份同天也只計一次)
-        no_entry_vehicles_per_day: Set[Tuple[str, str]] = set()
+        # ✅ 按車牌統計 (相同車牌同天只計一次)
+        no_entry_vehicles_per_day: Set[Tuple[str, str]] = set()  # (date, plate)
         entry_vehicles_per_day: Set[Tuple[str, str]] = set()
         warning_vehicles_per_day: Set[Tuple[str, str]] = set()
         
-        no_entry_identities_per_day: Set[Tuple[str, str]] = set()      # ✅ 改為 set
-        entry_identities_per_day: Set[Tuple[str, str]] = set()         # ✅ 改為 set
-        warning_identities_per_day: Set[Tuple[str, str]] = set()       # ✅ 改為 set
+        # ✅ 按身份和結果統計 (用於后續計算不重複的車輛)
+        no_entry_by_identity: Dict[str, Set[str]] = defaultdict(set)  # identity -> set of plates
+        entry_by_identity: Dict[str, Set[str]] = defaultdict(set)
+        warning_by_identity: Dict[str, Set[str]] = defaultdict(set)
+        
+        # ✅ 記錄最後無法入場的時間
+        no_entry_last_time: Dict[str, str] = {}
 
         for record in records_to_analyze:
             try:
@@ -611,31 +615,28 @@ class VehicleImporter:
                 
                 if record.result == "無法入場":
                     no_entry_vehicles_per_day.add((record_date, record.plate_number))
-                    no_entry_identities_per_day.add((record_date, record.identity))
+                    no_entry_by_identity[record.identity].add(record.plate_number)
+                    
+                    # 保留最新的無法入場時間
+                    if record.plate_number not in no_entry_last_time or record.time > no_entry_last_time[record.plate_number]:
+                        no_entry_last_time[record.plate_number] = record.time
                         
                 elif record.result == "入場":
                     entry_vehicles_per_day.add((record_date, record.plate_number))
-                    entry_identities_per_day.add((record_date, record.identity))
+                    entry_by_identity[record.identity].add(record.plate_number)
                         
                 elif record.result == "預警":
                     warning_vehicles_per_day.add((record_date, record.plate_number))
-                    warning_identities_per_day.add((record_date, record.identity))
+                    warning_by_identity[record.identity].add(record.plate_number)
             except:
                 pass
 
-        # ✅ 統計各個身份的計數 (相同身份同天去重)
-        no_entry_identities = defaultdict(int)
-        entry_identities = defaultdict(int)
-        warning_identities = defaultdict(int)
-        
-        for (date, identity) in no_entry_identities_per_day:
-            no_entry_identities[identity] += 1
-        for (date, identity) in entry_identities_per_day:
-            entry_identities[identity] += 1
-        for (date, identity) in warning_identities_per_day:
-            warning_identities[identity] += 1
+        # ✅ 統計各個身份的不重複車輛數
+        no_entry_identities = {identity: len(plates) for identity, plates in no_entry_by_identity.items()}
+        entry_identities = {identity: len(plates) for identity, plates in entry_by_identity.items()}
+        warning_identities = {identity: len(plates) for identity, plates in warning_by_identity.items()}
 
-        # 統計各個車牌的計數
+        # ✅ 統計各個車牌的天數
         no_entry_vehicles = defaultdict(int)
         entry_vehicles = defaultdict(int)
         
@@ -644,16 +645,24 @@ class VehicleImporter:
         for (date, plate) in entry_vehicles_per_day:
             entry_vehicles[plate] += 1
 
+        # ✅ 統計總數：計算不重複的車牌數
+        all_no_entry_plates = set(plate for (date, plate) in no_entry_vehicles_per_day)
+        all_entry_plates = set(plate for (date, plate) in entry_vehicles_per_day)
+        all_warning_plates = set(plate for (date, plate) in warning_vehicles_per_day)
+        
+        total_plates = all_no_entry_plates | all_entry_plates | all_warning_plates
+
         stats = {
-            "total": len(no_entry_vehicles_per_day | entry_vehicles_per_day | warning_vehicles_per_day),
-            "no_entry_total": len(no_entry_vehicles_per_day),
-            "entry_total": len(entry_vehicles_per_day),
-            "warning_total": len(warning_vehicles_per_day),
+            "total": len(total_plates),
+            "no_entry_total": len(all_no_entry_plates),
+            "entry_total": len(all_entry_plates),
+            "warning_total": len(all_warning_plates),
             "no_entry_vehicles": no_entry_vehicles,
-            "no_entry_identities": no_entry_identities,
+            "no_entry_identities": no_entry_identities,  # ✅ 按不重複車輛數
+            "no_entry_last_time": no_entry_last_time,
             "entry_vehicles": entry_vehicles,
-            "entry_identities": entry_identities,
-            "warning_identities": warning_identities,
+            "entry_identities": entry_identities,  # ✅ 按不重複車輛數
+            "warning_identities": warning_identities,  # ✅ 按不重複車輛數
             "date_range": (start_date, end_date) if (start_date or end_date) else self.get_date_range()
         }
 
@@ -755,7 +764,7 @@ class PDFReportGenerator:
             elements = []
             styles = getSampleStyleSheet()
 
-            # 標題 - 使用中文
+            # 標題
             title_style = ParagraphStyle(
                 'CustomTitle',
                 parent=styles['Heading1'],
@@ -804,17 +813,19 @@ class PDFReportGenerator:
             elements.append(summary_table)
             elements.append(Spacer(1, 20))
 
-            # 車號統計
+            # 車號統計 - 包含最後無法入場時間
             plate_title_style = ParagraphStyle('Heading2', parent=styles['Heading2'], fontName=FONT_NAME)
-            elements.append(Paragraph("車號統計", plate_title_style))
+            elements.append(Paragraph("無法入場車號統計 (含最後無法入場時間)", plate_title_style))
             elements.append(Spacer(1, 10))
 
             no_entry_vehicles = sorted(stats['no_entry_vehicles'].items(), key=lambda x: x[1], reverse=True)
             if no_entry_vehicles:
-                no_entry_data = [["車號", "無法入場車子"]]
-                no_entry_data.extend([[plate, str(count)] for plate, count in no_entry_vehicles[:10]])
+                no_entry_data = [["車號", "無法入場天數", "最後無法入場時間"]]
+                for plate, count in no_entry_vehicles[:20]:
+                    last_time = stats.get('no_entry_last_time', {}).get(plate, "")
+                    no_entry_data.append([plate, str(count), last_time])
                 
-                no_entry_table = Table(no_entry_data, colWidths=[3*inch, 2*inch])
+                no_entry_table = Table(no_entry_data, colWidths=[2*inch, 1.5*inch, 2.5*inch])
                 no_entry_table.setStyle(TableStyle([
                     ('BACKGROUND', (0, 0), (-1, 0), colors.HexColor('#F44336')),
                     ('TEXTCOLOR', (0, 0), (-1, 0), colors.whitesmoke),
@@ -831,12 +842,12 @@ class PDFReportGenerator:
 
             elements.append(Spacer(1, 20))
 
-            # 身份統計
+            # 身份統計 - ✅ 按不重複車輛數量
             identity_title_style = ParagraphStyle('Heading2', parent=styles['Heading2'], fontName=FONT_NAME)
-            elements.append(Paragraph("身份統計", identity_title_style))
+            elements.append(Paragraph("身份統計 (按不重複車輛數量)", identity_title_style))
             elements.append(Spacer(1, 10))
 
-            identity_data = [["身份", "入場車子", "無法入場車子", "預警車子", "合計"]]
+            identity_data = [["身份", "入場車輛", "無法入場車輛", "預警車輛", "合計"]]
             all_identities = set(list(stats.get('no_entry_identities', {}).keys()) + 
                                list(stats.get('entry_identities', {}).keys()) +
                                list(stats.get('warning_identities', {}).keys()))
@@ -1117,7 +1128,7 @@ class StatisticsWindow(tk.Toplevel):
     def __init__(self, parent, stats: Dict[str, Any], importer: VehicleImporter):
         super().__init__(parent)
         self.title("📊 統計資訊")
-        self.geometry("1200x700")
+        self.geometry("1400x800")
         self.resizable(True, True)
         self.configure(bg="white")
         self.transient(parent)
@@ -1132,7 +1143,7 @@ class StatisticsWindow(tk.Toplevel):
         """構建統計 UI"""
         title = tk.Label(
             self,
-            text="📊 統計資訊 (相同車牌每天只算一次，相同身份每天只算一次)",
+            text="📊 統計資訊 (按不重複車輛數量統計)",
             font=("微軟雅黑", 16, "bold"),
             bg="white",
             fg="#333"
@@ -1172,69 +1183,21 @@ class StatisticsWindow(tk.Toplevel):
             justify=tk.LEFT
         ).pack(fill=tk.X, padx=10, pady=10)
 
-        main_frame = tk.Frame(self, bg="white")
-        main_frame.pack(fill=tk.BOTH, expand=True, padx=15, pady=(0, 15))
+        # 選項卡
+        notebook = ttk.Notebook(self)
+        notebook.pack(fill=tk.BOTH, expand=True, padx=10, pady=10)
 
-        columns = ("類型", "無法入場", "入場", "預警", "合計")
-        tree = ttk.Treeview(main_frame, columns=columns, height=15, show="headings")
+        # 選項卡 1: 無法入場車子
+        no_entry_frame = tk.Frame(notebook)
+        notebook.add(no_entry_frame, text="❌ 無法入場車子")
+        self._build_no_entry_tab(no_entry_frame)
 
-        tree.column("類型", width=150, anchor="center")
-        tree.column("無法入場", width=200, anchor="center")
-        tree.column("入場", width=200, anchor="center")
-        tree.column("預警", width=200, anchor="center")
-        tree.column("合計", width=150, anchor="center")
+        # 選項卡 2: 身份統計
+        identity_frame = tk.Frame(notebook)
+        notebook.add(identity_frame, text="👥 身份統計")
+        self._build_identity_tab(identity_frame)
 
-        tree.heading("類型", text="類型")
-        tree.heading("無法入場", text="✘ 無法入場")
-        tree.heading("入場", text="✓ 入場")
-        tree.heading("預警", text="⚠️ 預警")
-        tree.heading("合計", text="合計")
-
-        tree.tag_configure("header", background="#e8f5e9", foreground="#1b5e20", font=("微軟雅黑", 11, "bold"))
-        tree.tag_configure("vehicle", background="#f5f5f5", foreground="#333")
-
-        tree.insert("", tk.END, values=("統計類別", "", "", "", ""), tags=("header",))
-
-        tree.insert("", tk.END, values=("", "", "", "", ""), tags=("vehicle",))
-        tree.insert("", tk.END, values=("【車號統計 - 無法入場】", "", "", "", ""), tags=("vehicle",))
-
-        for plate, count in sorted(self.stats['no_entry_vehicles'].items(), key=lambda x: x[1], reverse=True):
-            tree.insert("", tk.END, values=("  {0}".format(plate), "{0}".format(count), "-", "-", "{0}".format(count)), tags=("vehicle",))
-
-        tree.insert("", tk.END, values=("", "", "", "", ""), tags=("vehicle",))
-        tree.insert("", tk.END, values=("【車號統計 - 入場】", "", "", "", ""), tags=("vehicle",))
-
-        for plate, count in sorted(self.stats['entry_vehicles'].items(), key=lambda x: x[1], reverse=True):
-            tree.insert("", tk.END, values=("  {0}".format(plate), "-", "{0}".format(count), "-", "{0}".format(count)), tags=("vehicle",))
-
-        tree.insert("", tk.END, values=("", "", "", "", ""), tags=("vehicle",))
-        tree.insert("", tk.END, values=("", "", "", "", ""), tags=("vehicle",))
-        tree.insert("", tk.END, values=("【身份統計】", "", "", "", ""), tags=("vehicle",))
-
-        all_identities = set(list(self.stats.get('no_entry_identities', {}).keys()) + 
-                           list(self.stats.get('entry_identities', {}).keys()) +
-                           list(self.stats.get('warning_identities', {}).keys()))
-        for identity in sorted(all_identities):
-            no_entry_count = self.stats.get('no_entry_identities', {}).get(identity, 0)
-            entry_count = self.stats.get('entry_identities', {}).get(identity, 0)
-            warning_count = self.stats.get('warning_identities', {}).get(identity, 0)
-            total = no_entry_count + entry_count + warning_count
-            tree.insert("", tk.END, values=("  {0}".format(identity), "{0}".format(no_entry_count), "{0}".format(entry_count), "{0}".format(warning_count), "{0}".format(total)), tags=("vehicle",))
-
-        tree.insert("", tk.END, values=("", "", "", "", ""), tags=("vehicle",))
-        tree.insert("", tk.END, values=("【合計】", "{0}".format(self.stats['no_entry_total']), "{0}".format(self.stats['entry_total']), "{0}".format(self.stats['warning_total']), "{0}".format(self.stats['total'])), tags=("header",))
-
-        scrollbar_y = ttk.Scrollbar(main_frame, orient="vertical", command=tree.yview)
-        scrollbar_x = ttk.Scrollbar(main_frame, orient="horizontal", command=tree.xview)
-        tree.configure(yscrollcommand=scrollbar_y.set, xscrollcommand=scrollbar_x.set)
-
-        tree.grid(row=0, column=0, sticky="nsew")
-        scrollbar_y.grid(row=0, column=1, sticky="ns")
-        scrollbar_x.grid(row=1, column=0, sticky="ew")
-
-        main_frame.grid_rowconfigure(0, weight=1)
-        main_frame.grid_columnconfigure(0, weight=1)
-
+        # 按鈕欄
         btn_frame = tk.Frame(self, bg="white")
         btn_frame.pack(fill=tk.X, padx=20, pady=(0, 16))
 
@@ -1252,6 +1215,80 @@ class StatisticsWindow(tk.Toplevel):
                   bg="#757575", fg="white", activebackground="#666",
                   font=("微軟雅黑", 10), padx=20, pady=6,
                   relief="flat", bd=0, cursor="hand2").pack(side=tk.LEFT, padx=4)
+
+    def _build_no_entry_tab(self, parent):
+        """構建無法入場選項卡"""
+        scroll_frame = tk.Frame(parent)
+        scroll_frame.pack(fill=tk.BOTH, expand=True)
+
+        scrollbar_y = ttk.Scrollbar(scroll_frame, orient="vertical")
+        scrollbar_y.pack(side=tk.RIGHT, fill=tk.Y)
+
+        scrollbar_x = ttk.Scrollbar(scroll_frame, orient="horizontal")
+        scrollbar_x.pack(side=tk.BOTTOM, fill=tk.X)
+
+        columns = ("車號", "無法入場天數", "最後無法入場時間")
+        tree = ttk.Treeview(scroll_frame, columns=columns, height=25, show="headings", yscrollcommand=scrollbar_y.set, xscrollcommand=scrollbar_x.set)
+        scrollbar_y.config(command=tree.yview)
+        scrollbar_x.config(command=tree.xview)
+
+        tree.column("車號", width=150, anchor="center")
+        tree.column("無法入場天數", width=150, anchor="center")
+        tree.column("最後無法入場時間", width=250, anchor="center")
+
+        tree.heading("車號", text="車號")
+        tree.heading("無法入場天數", text="無法入場天數")
+        tree.heading("最後無法入場時間", text="最後無法入場時間")
+
+        tree.tag_configure("data", background="#f5f5f5")
+
+        for plate, count in sorted(self.stats['no_entry_vehicles'].items(), key=lambda x: x[1], reverse=True):
+            last_time = self.stats.get('no_entry_last_time', {}).get(plate, "")
+            tree.insert("", tk.END, values=(plate, count, last_time), tags=("data",))
+
+        tree.pack(fill=tk.BOTH, expand=True)
+
+    def _build_identity_tab(self, parent):
+        """構建身份統計選項卡 - ✅ 按不重複車輛數量"""
+        scroll_frame = tk.Frame(parent)
+        scroll_frame.pack(fill=tk.BOTH, expand=True)
+
+        scrollbar_y = ttk.Scrollbar(scroll_frame, orient="vertical")
+        scrollbar_y.pack(side=tk.RIGHT, fill=tk.Y)
+
+        scrollbar_x = ttk.Scrollbar(scroll_frame, orient="horizontal")
+        scrollbar_x.pack(side=tk.BOTTOM, fill=tk.X)
+
+        columns = ("身份", "入場車輛", "無法入場車輛", "預警車輛", "合計")
+        tree = ttk.Treeview(scroll_frame, columns=columns, height=25, show="headings", yscrollcommand=scrollbar_y.set, xscrollcommand=scrollbar_x.set)
+        scrollbar_y.config(command=tree.yview)
+        scrollbar_x.config(command=tree.xview)
+
+        tree.column("身份", width=100, anchor="center")
+        tree.column("入場車輛", width=120, anchor="center")
+        tree.column("無法入場車輛", width=150, anchor="center")
+        tree.column("預警車輛", width=120, anchor="center")
+        tree.column("合計", width=100, anchor="center")
+
+        tree.heading("身份", text="身份")
+        tree.heading("入場車輛", text="✓ 入場車輛")
+        tree.heading("無法入場車輛", text="✘ 無法入場車輛")
+        tree.heading("預警車輛", text="⚠️ 預警車輛")
+        tree.heading("合計", text="合計")
+
+        tree.tag_configure("data", background="#f5f5f5")
+
+        all_identities = set(list(self.stats.get('no_entry_identities', {}).keys()) + 
+                           list(self.stats.get('entry_identities', {}).keys()) +
+                           list(self.stats.get('warning_identities', {}).keys()))
+        for identity in sorted(all_identities):
+            no_entry_count = self.stats.get('no_entry_identities', {}).get(identity, 0)
+            entry_count = self.stats.get('entry_identities', {}).get(identity, 0)
+            warning_count = self.stats.get('warning_identities', {}).get(identity, 0)
+            total = no_entry_count + entry_count + warning_count
+            tree.insert("", tk.END, values=(identity, entry_count, no_entry_count, warning_count, total), tags=("data",))
+
+        tree.pack(fill=tk.BOTH, expand=True)
 
     def export_statistics_pdf(self):
         """導出統計 PDF"""
@@ -1318,7 +1355,7 @@ class StatisticsWindow(tk.Toplevel):
 
 
 # ============================================================================
-# GUI 層
+# GUI 層 - 其餘代碼保持不變
 # ============================================================================
 
 class VehicleImporterGUI:
@@ -1693,7 +1730,7 @@ class VehicleImporterGUI:
 
 
 # ============================================================================
-# 嵌入式視圖（給 launcher 使用）
+# 嵌入式視圖
 # ============================================================================
 
 class VehicleImporterView(ttk.Frame):
