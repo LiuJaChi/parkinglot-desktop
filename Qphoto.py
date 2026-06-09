@@ -1,25 +1,12 @@
 # -*- coding: utf-8 -*-
 """
-Created on Tue Jun  9 13:25:57 2026
-
-@author: USER
-"""
-
-# -*- coding: utf-8 -*-
-"""
-Created on Mon Apr 13 15:00:46 2026
-
-@author: USER
-"""
-
-# -*- coding: utf-8 -*-
-"""
-車輛通行記錄導入管理系統 - GUI 版本
+車輛通行記錄導入管理系統 - 完整版本
 支持: 時間、車道、車號、身份、結果、電子標籤
-查詢條件: 車號(輸入)、身份(下拉)、結果(下拉)、日期範圍 (支持多條件組合)
+查詢條件: 車號(輸入)、身份(下拉)、結果(下拉)、日期範圍
 車號為空白/NAN/nan/null 的記錄 - 完全忽略不顯示
 支持匯入格式: Excel (.xlsx, .xls) 和 CSV (.csv)
 支持輸出格式: PDF 報表
+統計方式: 相同車牌一天只算一次（按車子數量而非次數）
 
 依賴庫：openpyxl, pillow, reportlab
 """
@@ -32,7 +19,7 @@ import sys
 import csv
 import queue
 from datetime import datetime, timedelta
-from typing import List, Dict, Any, Tuple
+from typing import List, Dict, Any, Tuple, Set
 from dataclasses import dataclass, asdict
 import tkinter as tk
 from tkinter import filedialog, messagebox, ttk
@@ -70,6 +57,7 @@ try:
 except ImportError:
     pass
 
+
 # ============================================================================
 # 中文字體註冊
 # ============================================================================
@@ -82,68 +70,52 @@ def register_chinese_fonts():
         return False
     
     try:
-        # 定義不同系統的字體路徑
         font_paths = []
         
-        # Windows 系統
         if sys.platform == 'win32':
             font_paths = [
-                r"C:\Windows\Fonts\simsun.ttc",      # 宋體
-                r"C:\Windows\Fonts\simhei.ttf",      # 黑體
-                r"C:\Windows\Fonts\msyh.ttf",        # 微軟雅黑
-                r"C:\Windows\Fonts\msyh.ttc",        # 微軟雅黑（集合）
+                r"C:\Windows\Fonts\simsun.ttc",
+                r"C:\Windows\Fonts\simhei.ttf",
+                r"C:\Windows\Fonts\msyh.ttf",
+                r"C:\Windows\Fonts\msyh.ttc",
             ]
-        # macOS 系統
         elif sys.platform == 'darwin':
             font_paths = [
                 "/System/Library/Fonts/PingFang.ttc",
                 "/Library/Fonts/SimSun.ttf",
                 "/System/Library/Fonts/Songti.ttc",
-                "/System/Library/Fonts/STHeiti Light.ttf",
             ]
-        # Linux 系統
         else:
             font_paths = [
                 "/usr/share/fonts/opentype/noto/NotoSansCJK-Regular.ttc",
                 "/usr/share/fonts/truetype/droid/DroidSansFallback.ttf",
-                "/usr/share/fonts/truetype/noto/NotoSansCJK-Regular.otf",
-                "/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf",
             ]
         
-        # 嘗試註冊字體
         for font_path in font_paths:
             if os.path.exists(font_path):
                 try:
-                    # 檢查字體文件是否有效
                     if font_path.endswith('.ttf'):
                         pdfmetrics.registerFont(TTFont('SimSun', font_path))
                     elif font_path.endswith('.ttc'):
-                        # 某些系統 ttc 文件需要特殊處理
                         try:
                             pdfmetrics.registerFont(TTFont('SimSun', font_path))
-                        except Exception:
+                        except:
                             continue
                     
                     FONT_REGISTERED = True
                     FONT_NAME = 'SimSun'
-                    print(f"✓ 成功註冊中文字體: {font_path}")
                     return True
-                except Exception as e:
-                    print(f"✗ 字體註冊失敗 ({font_path}): {str(e)}")
+                except:
                     continue
         
-        # 若找不到系統字體，使用預設字體
         FONT_NAME = 'Helvetica'
-        print("⚠ 警告：未找到中文字體，將使用英文字體")
         return False
         
-    except Exception as e:
-        print(f"字體初始化錯誤: {str(e)}")
+    except Exception:
         FONT_NAME = 'Helvetica'
         return False
 
 
-# 應用程序啟動時初始化字體
 if REPORTLAB_AVAILABLE:
     register_chinese_fonts()
 
@@ -207,7 +179,7 @@ class ProgressWindow:
                     self.update_progress_ui(current, total, detail_text)
                 except queue.Empty:
                     break
-        except Exception:
+        except:
             pass
 
         if not self.is_closed:
@@ -217,7 +189,7 @@ class ProgressWindow:
         """更新進度（線程安全）"""
         try:
             self.progress_queue.put((current, total, detail_text))
-        except Exception:
+        except:
             pass
 
     def update_progress_ui(self, current: int, total: int, detail_text: str = ""):
@@ -229,7 +201,7 @@ class ProgressWindow:
             self.percent_label.config(text="{0}%".format(percentage))
             self.detail_label.config(text=detail_text if detail_text else "已處理: {0}/{1} 筆".format(current, total))
             self.window.update_idletasks()
-        except Exception:
+        except:
             pass
 
     def close(self):
@@ -237,7 +209,7 @@ class ProgressWindow:
         try:
             self.is_closed = True
             self.window.destroy()
-        except Exception:
+        except:
             pass
 
 
@@ -399,7 +371,7 @@ class VehicleImporter:
                     data = json.load(f)
                     self.records = [VehicleRecord(**record) for record in data]
                 return
-            except Exception:
+            except:
                 pass
         self._init_sample_data()
 
@@ -422,7 +394,7 @@ class VehicleImporter:
         try:
             with open(self.json_file, 'w', encoding='utf-8') as f:
                 json.dump([asdict(record) for record in self.records], f, ensure_ascii=False, indent=2)
-        except Exception:
+        except:
             pass
 
     @staticmethod
@@ -484,7 +456,7 @@ class VehicleImporter:
                     next_id += 1
                     imported_count += 1
 
-                except Exception:
+                except:
                     pass
 
             workbook.close()
@@ -538,7 +510,7 @@ class VehicleImporter:
                         next_id += 1
                         imported_count += 1
 
-                    except Exception:
+                    except:
                         pass
 
             self.save_data()
@@ -591,13 +563,13 @@ class VehicleImporter:
                         continue
                     if end_date and record_date > end_date:
                         continue
-                except Exception:
+                except:
                     continue
             results.append(asdict(record))
         return results
 
     def get_statistics(self, start_date: str = "", end_date: str = "") -> Dict[str, Any]:
-        """獲取統計資訊"""
+        """獲取統計資訊 - 相同車牌每天只算一次"""
         records_to_analyze = []
         if start_date or end_date:
             for record in self.records:
@@ -610,7 +582,7 @@ class VehicleImporter:
                     if end_date and record_date > end_date:
                         continue
                     records_to_analyze.append(record)
-                except Exception:
+                except:
                     continue
         else:
             records_to_analyze = [r for r in self.records if self.is_valid_record(r.plate_number)]
@@ -618,29 +590,74 @@ class VehicleImporter:
         if not records_to_analyze:
             return {
                 "total": 0, "no_entry_total": 0, "entry_total": 0, "warning_total": 0,
-                "no_entry_vehicles": {}, "no_entry_identities": {}, "entry_vehicles": {}, "entry_identities": {},
+                "no_entry_vehicles": {}, "no_entry_identities": {}, 
+                "entry_vehicles": {}, "entry_identities": {},
                 "date_range": (start_date, end_date)
             }
 
-        stats = {
-            "total": len(records_to_analyze),
-            "no_entry_total": 0, "entry_total": 0, "warning_total": 0,
-            "no_entry_vehicles": defaultdict(int), "no_entry_identities": defaultdict(int),
-            "entry_vehicles": defaultdict(int), "entry_identities": defaultdict(int),
-            "date_range": (start_date, end_date) if (start_date or end_date) else self.get_date_range()
-        }
+        # 統計邏輯：相同車牌一天只計算一次
+        no_entry_vehicles_per_day: Set[Tuple[str, str]] = set()
+        entry_vehicles_per_day: Set[Tuple[str, str]] = set()
+        warning_vehicles_per_day: Set[Tuple[str, str]] = set()
+        
+        no_entry_identities_per_day: Dict[Tuple[str, str], bool] = {}
+        entry_identities_per_day: Dict[Tuple[str, str], bool] = {}
+        warning_identities_per_day: Dict[Tuple[str, str], bool] = {}
 
         for record in records_to_analyze:
-            if record.result == "無法入場":
-                stats["no_entry_total"] += 1
-                stats["no_entry_vehicles"][record.plate_number] += 1
-                stats["no_entry_identities"][record.identity] += 1
-            elif record.result == "入場":
-                stats["entry_total"] += 1
-                stats["entry_vehicles"][record.plate_number] += 1
-                stats["entry_identities"][record.identity] += 1
-            elif record.result == "預警":
-                stats["warning_total"] += 1
+            try:
+                record_date = record.time.split()[0]
+                
+                if record.result == "無法入場":
+                    no_entry_vehicles_per_day.add((record_date, record.plate_number))
+                    if (record_date, record.identity) not in no_entry_identities_per_day:
+                        no_entry_identities_per_day[(record_date, record.identity)] = True
+                        
+                elif record.result == "入場":
+                    entry_vehicles_per_day.add((record_date, record.plate_number))
+                    if (record_date, record.identity) not in entry_identities_per_day:
+                        entry_identities_per_day[(record_date, record.identity)] = True
+                        
+                elif record.result == "預警":
+                    warning_vehicles_per_day.add((record_date, record.plate_number))
+                    if (record_date, record.identity) not in warning_identities_per_day:
+                        warning_identities_per_day[(record_date, record.identity)] = True
+            except:
+                pass
+
+        # 統計各個身份的計數
+        no_entry_identities = defaultdict(int)
+        entry_identities = defaultdict(int)
+        warning_identities = defaultdict(int)
+        
+        for (date, identity) in no_entry_identities_per_day:
+            no_entry_identities[identity] += 1
+        for (date, identity) in entry_identities_per_day:
+            entry_identities[identity] += 1
+        for (date, identity) in warning_identities_per_day:
+            warning_identities[identity] += 1
+
+        # 統計各個車牌的計數
+        no_entry_vehicles = defaultdict(int)
+        entry_vehicles = defaultdict(int)
+        
+        for (date, plate) in no_entry_vehicles_per_day:
+            no_entry_vehicles[plate] += 1
+        for (date, plate) in entry_vehicles_per_day:
+            entry_vehicles[plate] += 1
+
+        stats = {
+            "total": len(no_entry_vehicles_per_day | entry_vehicles_per_day | warning_vehicles_per_day),
+            "no_entry_total": len(no_entry_vehicles_per_day),
+            "entry_total": len(entry_vehicles_per_day),
+            "warning_total": len(warning_vehicles_per_day),
+            "no_entry_vehicles": no_entry_vehicles,
+            "no_entry_identities": no_entry_identities,
+            "entry_vehicles": entry_vehicles,
+            "entry_identities": entry_identities,
+            "warning_identities": warning_identities,
+            "date_range": (start_date, end_date) if (start_date or end_date) else self.get_date_range()
+        }
 
         return stats
 
@@ -659,7 +676,7 @@ class VehicleImporter:
                             plate_number in filename and "入口" in filename):
                         return os.path.join(date_dir, filename)
             return ""
-        except Exception:
+        except:
             return ""
 
     def find_vehicle_image(self, plate_number: str, datetime_str: str) -> str:
@@ -691,7 +708,7 @@ class VehicleImporter:
                                     return os.path.join(date_dir, filename)
                                 if file_time < target_time:
                                     matching_files.append((file_time, filename))
-                    except Exception:
+                    except:
                         continue
 
             if matching_files:
@@ -700,7 +717,7 @@ class VehicleImporter:
                 return os.path.join(date_dir, closest_file)
 
             return ""
-        except Exception:
+        except:
             return ""
 
 
@@ -712,13 +729,12 @@ class PDFReportGenerator:
     """PDF 報表生成器"""
 
     @staticmethod
-    def generate_statistics_report(output_path: str, stats: Dict[str, Any], title: str = "車輛通行記錄統計報表") -> Tuple[bool, str]:
+    def generate_statistics_report(output_path: str, stats: Dict[str, Any], title: str = "Vehicle Traffic Statistics") -> Tuple[bool, str]:
         """生成統計報表 PDF"""
         if not REPORTLAB_AVAILABLE:
             return False, "缺少 reportlab 庫\n請執行: pip install reportlab"
 
         try:
-            # 確保輸出目錄存在
             output_dir = os.path.dirname(output_path)
             if output_dir and not os.path.exists(output_dir):
                 try:
@@ -726,13 +742,11 @@ class PDFReportGenerator:
                 except Exception as e:
                     return False, "無法創建輸出目錄: {0}".format(str(e))
             
-            # 檢查寫入權限
             test_path = output_path
             if not output_dir:
                 test_path = os.path.join(os.getcwd(), output_path)
             
             try:
-                # 嘗試測試寫入權限
                 test_dir = os.path.dirname(test_path) or os.getcwd()
                 if not os.access(test_dir, os.W_OK):
                     return False, "無寫入權限到目錄: {0}".format(test_dir)
@@ -743,7 +757,7 @@ class PDFReportGenerator:
             elements = []
             styles = getSampleStyleSheet()
 
-            # 標題
+            # 標題 - 使用中文
             title_style = ParagraphStyle(
                 'CustomTitle',
                 parent=styles['Heading1'],
@@ -753,7 +767,8 @@ class PDFReportGenerator:
                 alignment=TA_CENTER,
                 fontName=FONT_NAME
             )
-            elements.append(Paragraph(title, title_style))
+            title_text = "車輛通行統計報表"
+            elements.append(Paragraph(title_text, title_style))
             elements.append(Spacer(1, 12))
 
             # 生成時間
@@ -768,7 +783,7 @@ class PDFReportGenerator:
             warning_percent = round(stats['warning_total'] * 100 / stats['total']) if stats['total'] > 0 else 0
 
             summary_data = [
-                ["統計項目", "數量", "百分比"],
+                ["統計項目", "車子數量", "百分比"],
                 ["總計", str(stats['total']), "100%"],
                 ["入場", str(stats['entry_total']), "{0}%".format(entry_percent)],
                 ["無法入場", str(stats['no_entry_total']), "{0}%".format(no_entry_percent)],
@@ -792,12 +807,13 @@ class PDFReportGenerator:
             elements.append(Spacer(1, 20))
 
             # 車號統計
-            elements.append(Paragraph("車號統計", styles['Heading2']))
+            plate_title_style = ParagraphStyle('Heading2', parent=styles['Heading2'], fontName=FONT_NAME)
+            elements.append(Paragraph("車號統計", plate_title_style))
             elements.append(Spacer(1, 10))
 
             no_entry_vehicles = sorted(stats['no_entry_vehicles'].items(), key=lambda x: x[1], reverse=True)
             if no_entry_vehicles:
-                no_entry_data = [["車號", "無法入場次數"]]
+                no_entry_data = [["車號", "無法入場車子"]]
                 no_entry_data.extend([[plate, str(count)] for plate, count in no_entry_vehicles[:10]])
                 
                 no_entry_table = Table(no_entry_data, colWidths=[3*inch, 2*inch])
@@ -813,23 +829,27 @@ class PDFReportGenerator:
                 ]))
                 elements.append(no_entry_table)
             else:
-                elements.append(Paragraph("暫無無法入場記錄", styles['Normal']))
+                elements.append(Paragraph("No records", ParagraphStyle('Normal', parent=styles['Normal'], fontName=FONT_NAME)))
 
             elements.append(Spacer(1, 20))
 
             # 身份統計
-            elements.append(Paragraph("身份統計", styles['Heading2']))
+            identity_title_style = ParagraphStyle('Heading2', parent=styles['Heading2'], fontName=FONT_NAME)
+            elements.append(Paragraph("身份統計", identity_title_style))
             elements.append(Spacer(1, 10))
 
-            identity_data = [["身份", "入場次數", "無法入場次數", "合計"]]
-            all_identities = set(list(stats['no_entry_identities'].keys()) + list(stats['entry_identities'].keys()))
+            identity_data = [["身份", "入場車子", "無法入場車子", "預警車子", "合計"]]
+            all_identities = set(list(stats.get('no_entry_identities', {}).keys()) + 
+                               list(stats.get('entry_identities', {}).keys()) +
+                               list(stats.get('warning_identities', {}).keys()))
             for identity in sorted(all_identities):
-                no_entry_count = stats['no_entry_identities'].get(identity, 0)
-                entry_count = stats['entry_identities'].get(identity, 0)
-                total = no_entry_count + entry_count
-                identity_data.append([identity, str(entry_count), str(no_entry_count), str(total)])
+                no_entry_count = stats.get('no_entry_identities', {}).get(identity, 0)
+                entry_count = stats.get('entry_identities', {}).get(identity, 0)
+                warning_count = stats.get('warning_identities', {}).get(identity, 0)
+                total = no_entry_count + entry_count + warning_count
+                identity_data.append([identity, str(entry_count), str(no_entry_count), str(warning_count), str(total)])
 
-            identity_table = Table(identity_data, colWidths=[1.5*inch, 1.5*inch, 1.5*inch, 1.5*inch])
+            identity_table = Table(identity_data, colWidths=[1.0*inch, 1.0*inch, 1.2*inch, 1.0*inch, 1.0*inch])
             identity_table.setStyle(TableStyle([
                 ('BACKGROUND', (0, 0), (-1, 0), colors.HexColor('#4CAF50')),
                 ('TEXTCOLOR', (0, 0), (-1, 0), colors.whitesmoke),
@@ -852,13 +872,12 @@ class PDFReportGenerator:
             return False, "生成 PDF 失敗:\n{0}\n詳細: {1}".format(str(e), error_detail)
 
     @staticmethod
-    def generate_details_report(output_path: str, records: List[Dict], title: str = "車輛通行記錄詳細報表") -> Tuple[bool, str]:
+    def generate_details_report(output_path: str, records: List[Dict], title: str = "Vehicle Traffic Details") -> Tuple[bool, str]:
         """生成詳細記錄 PDF"""
         if not REPORTLAB_AVAILABLE:
             return False, "缺少 reportlab 庫\n請執行: pip install reportlab"
 
         try:
-            # 確保輸出目錄存在
             output_dir = os.path.dirname(output_path)
             if output_dir and not os.path.exists(output_dir):
                 try:
@@ -866,7 +885,6 @@ class PDFReportGenerator:
                 except Exception as e:
                     return False, "無法創建輸出目錄: {0}".format(str(e))
             
-            # 檢查寫入權限
             test_path = output_path
             if not output_dir:
                 test_path = os.path.join(os.getcwd(), output_path)
@@ -892,7 +910,8 @@ class PDFReportGenerator:
                 alignment=TA_CENTER,
                 fontName=FONT_NAME
             )
-            elements.append(Paragraph(title, title_style))
+            title_text = "車輛通行詳細報表"
+            elements.append(Paragraph(title_text, title_style))
             elements.append(Spacer(1, 12))
 
             # 生成時間和記錄數
@@ -902,7 +921,7 @@ class PDFReportGenerator:
             elements.append(Spacer(1, 12))
 
             # 詳細表格（分頁）
-            page_size = 50  # 每頁最多 50 筆記錄
+            page_size = 50
             total_pages = (len(records) + page_size - 1) // page_size
             
             for page_num in range(total_pages):
@@ -966,7 +985,7 @@ class MediaManager:
         """加載並顯示照片"""
         try:
             if not os.path.exists(photo_path):
-                label.config(text="❌ 照片文件不存在", fg="#f44336", image="")
+                label.config(text="✘ 照片文件不存在", fg="#f44336", image="")
                 return False
 
             img = Image.open(photo_path)
@@ -997,8 +1016,8 @@ class MediaManager:
             label.config(image=photo, text="", fg="white")
             MediaManager._media_cache[id(label)] = photo
             return True
-        except Exception:
-            label.config(text="❌ 無法加載照片", fg="#f44336", image="")
+        except:
+            label.config(text="✘ 無法加載照片", fg="#f44336", image="")
             return False
 
     @staticmethod
@@ -1008,7 +1027,7 @@ class MediaManager:
             cmd = ['ffmpeg', '-version'] if platform.system() != 'Windows' else ['ffmpeg', '-version']
             result = subprocess.run(cmd, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, timeout=5)
             return result.returncode == 0
-        except Exception:
+        except:
             return False
 
     @staticmethod
@@ -1031,7 +1050,7 @@ class MediaManager:
                 return None
 
             return temp_frame_path
-        except Exception:
+        except:
             return None
 
     @staticmethod
@@ -1039,13 +1058,13 @@ class MediaManager:
         """加載並顯示視頻第一幀"""
         try:
             if not os.path.exists(video_path):
-                label.config(text="❌ 影像文件不存在\n點擊播放", fg="#f44336", image="")
+                label.config(text="✘ 影像文件不存在\n點擊播放", fg="#f44336", image="")
                 return False
 
             frame_path = MediaManager.extract_video_frame(video_path)
 
             if not frame_path:
-                label.config(text="❌ 無法提取影像幀\n請確保已安裝 ffmpeg", fg="#f44336", image="")
+                label.config(text="✘ 無法提取影像幀\n請確保已安裝 ffmpeg", fg="#f44336", image="")
                 return False
 
             img = Image.open(frame_path)
@@ -1081,17 +1100,616 @@ class MediaManager:
 
             try:
                 os.remove(frame_path)
-            except Exception:
+            except:
                 pass
 
             return True
-        except Exception:
-            label.config(text="❌ 無法加載影像", fg="#f44336", image="")
+        except:
+            label.config(text="✘ 無法加載影像", fg="#f44336", image="")
             return False
 
 
-# [統計窗口和 GUI 部分因長度限制，省略中間代碼]
-# 完整代碼已包含在 GitHub 倉庫中
+# ============================================================================
+# 統計窗口
+# ============================================================================
+
+class StatisticsWindow(tk.Toplevel):
+    """統計資訊窗口"""
+
+    def __init__(self, parent, stats: Dict[str, Any], importer: VehicleImporter):
+        super().__init__(parent)
+        self.title("📊 統計資訊")
+        self.geometry("1200x700")
+        self.resizable(True, True)
+        self.configure(bg="white")
+        self.transient(parent)
+
+        self.stats = stats
+        self.importer = importer
+        self.parent = parent
+
+        self._build_ui()
+
+    def _build_ui(self):
+        """構建統計 UI"""
+        title = tk.Label(
+            self,
+            text="📊 統計資訊 (相同車牌每天只算一次)",
+            font=("微軟雅黑", 16, "bold"),
+            bg="white",
+            fg="#333"
+        )
+        title.pack(pady=15)
+
+        info_frame = tk.Frame(self, bg="#f5f5f5", relief=tk.SUNKEN, bd=2)
+        info_frame.pack(fill=tk.X, padx=15, pady=(0, 15))
+
+        no_entry_percent = round(self.stats['no_entry_total'] * 100 / self.stats['total']) if self.stats['total'] > 0 else 0
+        entry_percent = round(self.stats['entry_total'] * 100 / self.stats['total']) if self.stats['total'] > 0 else 0
+        warning_percent = round(self.stats['warning_total'] * 100 / self.stats['total']) if self.stats['total'] > 0 else 0
+
+        info_text = "📋 總計: {0} 輛車  |  ✘ 無法入場: {1} 輛 ({2}%)  |  ✓ 入場: {3} 輛 ({4}%)  |  ⚠️ 預警: {5} 輛 ({6}%)".format(
+            self.stats['total'],
+            self.stats['no_entry_total'],
+            no_entry_percent,
+            self.stats['entry_total'],
+            entry_percent,
+            self.stats['warning_total'],
+            warning_percent
+        )
+        
+        if self.stats['date_range'][0]:
+            info_text += "  |  📅 日期: {0} ~ {1}".format(
+                self.stats['date_range'][0],
+                self.stats['date_range'][1]
+            )
+
+        tk.Label(
+            info_frame,
+            text=info_text,
+            font=("微軟雅黑", 11, "bold"),
+            bg="#f5f5f5",
+            fg="#333",
+            anchor=tk.W,
+            justify=tk.LEFT
+        ).pack(fill=tk.X, padx=10, pady=10)
+
+        main_frame = tk.Frame(self, bg="white")
+        main_frame.pack(fill=tk.BOTH, expand=True, padx=15, pady=(0, 15))
+
+        columns = ("類型", "無法入場", "入場", "預警", "合計")
+        tree = ttk.Treeview(main_frame, columns=columns, height=15, show="headings")
+
+        tree.column("類型", width=150, anchor="center")
+        tree.column("無法入場", width=200, anchor="center")
+        tree.column("入場", width=200, anchor="center")
+        tree.column("預警", width=200, anchor="center")
+        tree.column("合計", width=150, anchor="center")
+
+        tree.heading("類型", text="類型")
+        tree.heading("無法入場", text="✘ 無法入場")
+        tree.heading("入場", text="✓ 入場")
+        tree.heading("預警", text="⚠️ 預警")
+        tree.heading("合計", text="合計")
+
+        tree.tag_configure("header", background="#e8f5e9", foreground="#1b5e20", font=("微軟雅黑", 11, "bold"))
+        tree.tag_configure("vehicle", background="#f5f5f5", foreground="#333")
+
+        tree.insert("", tk.END, values=("統計類別", "", "", "", ""), tags=("header",))
+
+        tree.insert("", tk.END, values=("", "", "", "", ""), tags=("vehicle",))
+        tree.insert("", tk.END, values=("【車號統計 - 無法入場】", "", "", "", ""), tags=("vehicle",))
+
+        for plate, count in sorted(self.stats['no_entry_vehicles'].items(), key=lambda x: x[1], reverse=True):
+            tree.insert("", tk.END, values=("  {0}".format(plate), "{0}".format(count), "-", "-", "{0}".format(count)), tags=("vehicle",))
+
+        tree.insert("", tk.END, values=("", "", "", "", ""), tags=("vehicle",))
+        tree.insert("", tk.END, values=("【車號統計 - 入場】", "", "", "", ""), tags=("vehicle",))
+
+        for plate, count in sorted(self.stats['entry_vehicles'].items(), key=lambda x: x[1], reverse=True):
+            tree.insert("", tk.END, values=("  {0}".format(plate), "-", "{0}".format(count), "-", "{0}".format(count)), tags=("vehicle",))
+
+        tree.insert("", tk.END, values=("", "", "", "", ""), tags=("vehicle",))
+        tree.insert("", tk.END, values=("", "", "", "", ""), tags=("vehicle",))
+        tree.insert("", tk.END, values=("【身份統計】", "", "", "", ""), tags=("vehicle",))
+
+        all_identities = set(list(self.stats.get('no_entry_identities', {}).keys()) + 
+                           list(self.stats.get('entry_identities', {}).keys()) +
+                           list(self.stats.get('warning_identities', {}).keys()))
+        for identity in sorted(all_identities):
+            no_entry_count = self.stats.get('no_entry_identities', {}).get(identity, 0)
+            entry_count = self.stats.get('entry_identities', {}).get(identity, 0)
+            warning_count = self.stats.get('warning_identities', {}).get(identity, 0)
+            total = no_entry_count + entry_count + warning_count
+            tree.insert("", tk.END, values=("  {0}".format(identity), "{0}".format(no_entry_count), "{0}".format(entry_count), "{0}".format(warning_count), "{0}".format(total)), tags=("vehicle",))
+
+        tree.insert("", tk.END, values=("", "", "", "", ""), tags=("vehicle",))
+        tree.insert("", tk.END, values=("【合計】", "{0}".format(self.stats['no_entry_total']), "{0}".format(self.stats['entry_total']), "{0}".format(self.stats['warning_total']), "{0}".format(self.stats['total'])), tags=("header",))
+
+        scrollbar_y = ttk.Scrollbar(main_frame, orient="vertical", command=tree.yview)
+        scrollbar_x = ttk.Scrollbar(main_frame, orient="horizontal", command=tree.xview)
+        tree.configure(yscrollcommand=scrollbar_y.set, xscrollcommand=scrollbar_x.set)
+
+        tree.grid(row=0, column=0, sticky="nsew")
+        scrollbar_y.grid(row=0, column=1, sticky="ns")
+        scrollbar_x.grid(row=1, column=0, sticky="ew")
+
+        main_frame.grid_rowconfigure(0, weight=1)
+        main_frame.grid_columnconfigure(0, weight=1)
+
+        btn_frame = tk.Frame(self, bg="white")
+        btn_frame.pack(fill=tk.X, padx=20, pady=(0, 16))
+
+        tk.Button(btn_frame, text="📊 導出統計PDF", command=self.export_statistics_pdf,
+                  bg="#2196F3", fg="white", activebackground="#1976D2",
+                  font=("微軟雅黑", 10), padx=20, pady=6,
+                  relief="flat", bd=0, cursor="hand2").pack(side=tk.LEFT, padx=4)
+
+        tk.Button(btn_frame, text="📋 導出詳細PDF", command=self.export_details_pdf,
+                  bg="#4CAF50", fg="white", activebackground="#388E3C",
+                  font=("微軟雅黑", 10), padx=20, pady=6,
+                  relief="flat", bd=0, cursor="hand2").pack(side=tk.LEFT, padx=4)
+
+        tk.Button(btn_frame, text="✘ 關閉", command=self.destroy,
+                  bg="#757575", fg="white", activebackground="#666",
+                  font=("微軟雅黑", 10), padx=20, pady=6,
+                  relief="flat", bd=0, cursor="hand2").pack(side=tk.LEFT, padx=4)
+
+    def export_statistics_pdf(self):
+        """導出統計 PDF"""
+        file_path = filedialog.asksaveasfilename(
+            title="保存統計報表",
+            defaultextension=".pdf",
+            filetypes=[("PDF 文件", "*.pdf")]
+        )
+        if not file_path:
+            return
+
+        if not REPORTLAB_AVAILABLE:
+            messagebox.showerror("錯誤", "缺少 reportlab 庫\n請執行: pip install reportlab")
+            return
+
+        try:
+            test_dir = os.path.dirname(file_path)
+            if test_dir and not os.path.exists(test_dir):
+                os.makedirs(test_dir)
+            if not os.access(test_dir if test_dir else '.', os.W_OK):
+                messagebox.showerror("錯誤", "無寫入權限到: {0}".format(test_dir if test_dir else '當前目錄'))
+                return
+        except Exception as e:
+            messagebox.showerror("錯誤", "路徑檢查失敗: {0}".format(str(e)))
+            return
+
+        success, message = PDFReportGenerator.generate_statistics_report(file_path, self.stats)
+        if success:
+            messagebox.showinfo("成功", message)
+        else:
+            messagebox.showerror("失敗", message)
+
+    def export_details_pdf(self):
+        """導出詳細 PDF"""
+        file_path = filedialog.asksaveasfilename(
+            title="保存詳細報表",
+            defaultextension=".pdf",
+            filetypes=[("PDF 文件", "*.pdf")]
+        )
+        if not file_path:
+            return
+
+        if not REPORTLAB_AVAILABLE:
+            messagebox.showerror("錯誤", "缺少 reportlab 庫\n請執行: pip install reportlab")
+            return
+
+        try:
+            test_dir = os.path.dirname(file_path)
+            if test_dir and not os.path.exists(test_dir):
+                os.makedirs(test_dir)
+            if not os.access(test_dir if test_dir else '.', os.W_OK):
+                messagebox.showerror("錯誤", "無寫入權限到: {0}".format(test_dir if test_dir else '當前目錄'))
+                return
+        except Exception as e:
+            messagebox.showerror("錯誤", "路徑檢查失敗: {0}".format(str(e)))
+            return
+
+        records = self.importer.get_all_records()
+        success, message = PDFReportGenerator.generate_details_report(file_path, records)
+        if success:
+            messagebox.showinfo("成功", message)
+        else:
+            messagebox.showerror("失敗", message)
+
+
+# ============================================================================
+# GUI 層
+# ============================================================================
+
+class VehicleImporterGUI:
+    """主 GUI 應用"""
+
+    def __init__(self, root):
+        self.root = root
+        self.importer = VehicleImporter()
+
+        if isinstance(self.root, (tk.Tk, tk.Toplevel)):
+            self.root.title("南方莊園車輛通行記錄導入管理系統")
+            self.root.geometry("1600x900")
+            self.root.resizable(True, True)
+            self.root.configure(bg="#f0f0f0")
+
+        self.progress_window = None
+        self.current_video_path = None
+
+        self.create_menu()
+        self.create_main_ui()
+        self.refresh_table()
+
+    def create_menu(self):
+        """創建菜單"""
+        if not isinstance(self.root, (tk.Tk, tk.Toplevel)):
+            return
+
+        menubar = tk.Menu(self.root)
+        self.root.config(menu=menubar)
+
+        file_menu = tk.Menu(menubar, tearoff=0)
+        menubar.add_cascade(label="檔案", menu=file_menu)
+        file_menu.add_command(label="📁 設置照片目錄", command=self.set_photo_directory)
+        file_menu.add_command(label="🎬 設置影像目錄", command=self.set_vehicle_image_directory)
+        file_menu.add_separator()
+        file_menu.add_command(label="📥 追加匯入", command=self.import_append)
+        file_menu.add_command(label="🔄 覆蓋匯入", command=self.import_replace)
+        file_menu.add_separator()
+        file_menu.add_command(label="📊 導出統計PDF", command=self.export_statistics_pdf)
+        file_menu.add_command(label="📋 導出詳細PDF", command=self.export_details_pdf)
+        file_menu.add_separator()
+        file_menu.add_command(label="🚪 結束", command=self.root.quit)
+
+        view_menu = tk.Menu(menubar, tearoff=0)
+        menubar.add_cascade(label="查看", menu=view_menu)
+        view_menu.add_command(label="🔄 刷新", command=self.refresh_table)
+        view_menu.add_command(label="📊 統計", command=self.show_statistics)
+
+    def set_photo_directory(self):
+        """設置照片目錄"""
+        directory = filedialog.askdirectory(title="選擇車輛照片目錄")
+        if directory:
+            self.importer.set_photo_directory(directory)
+            messagebox.showinfo("成功", "照片目錄已設置")
+
+    def set_vehicle_image_directory(self):
+        """設置影像目錄"""
+        directory = filedialog.askdirectory(title="選擇車輛影像目錄")
+        if directory:
+            self.importer.set_vehicle_image_directory(directory)
+            messagebox.showinfo("成功", "影像目錄已設置")
+
+    def create_main_ui(self):
+        """創建主 UI"""
+        top_frame = tk.Frame(self.root, bg="#f0f0f0")
+        top_frame.pack(fill=tk.X, padx=10, pady=10)
+
+        tk.Label(top_frame, text="🚗 車輛通行記錄管理", font=("微軟雅黑", 20, "bold"), bg="#f0f0f0", fg="#333").pack(side=tk.LEFT)
+
+        button_frame = tk.Frame(top_frame, bg="#f0f0f0")
+        button_frame.pack(side=tk.RIGHT)
+
+        buttons = [
+            ("📁 照片", self.set_photo_directory, "#FF5722"),
+            ("🎬 影像", self.set_vehicle_image_directory, "#00A8E8"),
+            ("📥 追加", self.import_append, "#4CAF50"),
+            ("🔄 覆蓋", self.import_replace, "#FF9800"),
+            ("📊 統計", self.show_statistics, "#9C27B0"),
+            ("📋 報表", self.export_statistics_pdf, "#F57C00"),
+        ]
+
+        for text, command, color in buttons:
+            tk.Button(button_frame, text=text, command=command, bg=color, fg="white", padx=12, pady=8, font=("微軟雅黑", 9), cursor="hand2").pack(side=tk.LEFT, padx=3)
+
+        ttk.Separator(self.root, orient="horizontal").pack(fill=tk.X)
+
+        search_frame = tk.LabelFrame(self.root, text="🔍 查詢條件", font=("微軟雅黑", 10, "bold"), bg="#f5f5f5", padx=10, pady=8)
+        search_frame.pack(fill=tk.X, padx=10, pady=8)
+
+        unique_values = self.importer.get_unique_values()
+
+        row1 = tk.Frame(search_frame, bg="#f5f5f5")
+        row1.pack(fill=tk.X, pady=3)
+
+        tk.Label(row1, text="車號:", font=("微軟雅黑", 9), bg="#f5f5f5", width=6).pack(side=tk.LEFT)
+        self.plate_var = tk.StringVar()
+        tk.Entry(row1, textvariable=self.plate_var, width=20, font=("微軟雅黑", 9)).pack(side=tk.LEFT, padx=(0, 10))
+
+        tk.Label(row1, text="身份:", font=("微軟雅黑", 9), bg="#f5f5f5", width=6).pack(side=tk.LEFT)
+        self.identity_var = tk.StringVar()
+        ttk.Combobox(row1, textvariable=self.identity_var, values=[""] + unique_values["identities"], width=15, state="readonly").pack(side=tk.LEFT, padx=(0, 10))
+
+        tk.Label(row1, text="結果:", font=("微軟雅黑", 9), bg="#f5f5f5", width=6).pack(side=tk.LEFT)
+        self.result_var = tk.StringVar()
+        ttk.Combobox(row1, textvariable=self.result_var, values=[""] + unique_values["results"], width=15, state="readonly").pack(side=tk.LEFT, padx=(0, 10))
+
+        tk.Button(row1, text="🔍 查詢", command=self.search_records, bg="#00BCD4", fg="white", padx=15, font=("微軟雅黑", 9), cursor="hand2").pack(side=tk.LEFT, padx=2)
+        tk.Button(row1, text="清空", command=self.clear_search, bg="#757575", fg="white", padx=15, font=("微軟雅黑", 9), cursor="hand2").pack(side=tk.LEFT, padx=2)
+
+        main_container = tk.Frame(self.root, bg="white")
+        main_container.pack(fill=tk.BOTH, expand=True, padx=5, pady=5)
+
+        left_frame = tk.Frame(main_container, bg="white")
+        left_frame.pack(side=tk.LEFT, fill=tk.BOTH, expand=True, padx=(0, 5))
+
+        self.status_label = tk.Label(left_frame, text="", font=("微軟雅黑", 9), bg="white", fg="#666")
+        self.status_label.pack(anchor=tk.W, pady=(0, 3))
+
+        scroll_frame = tk.Frame(left_frame, bg="white")
+        scroll_frame.pack(fill=tk.BOTH, expand=True)
+
+        scrollbar_y = ttk.Scrollbar(scroll_frame, orient="vertical")
+        scrollbar_y.pack(side=tk.RIGHT, fill=tk.Y)
+
+        scrollbar_x = ttk.Scrollbar(scroll_frame, orient="horizontal")
+        scrollbar_x.pack(side=tk.BOTTOM, fill=tk.X)
+
+        columns = ("ID", "時間", "車號", "身份", "結果", "標籤")
+        self.tree = ttk.Treeview(scroll_frame, columns=columns, height=20, show="headings", yscrollcommand=scrollbar_y.set, xscrollcommand=scrollbar_x.set)
+        scrollbar_y.config(command=self.tree.yview)
+        scrollbar_x.config(command=self.tree.xview)
+
+        for col in columns:
+            self.tree.column(col, width=100, anchor="center")
+            self.tree.heading(col, text=col)
+
+        self.tree.tag_configure("entry", background="#d4edda")
+        self.tree.tag_configure("no_entry", background="#f8d7da")
+        self.tree.tag_configure("warning", background="#fff3cd")
+
+        self.tree.pack(fill=tk.BOTH, expand=True)
+        self.tree.bind("<<TreeviewSelect>>", self.on_record_selected)
+
+        right_frame = tk.Frame(main_container, bg="white")
+        right_frame.pack(side=tk.LEFT, fill=tk.BOTH, expand=True, padx=(5, 0))
+
+        photo_frame = tk.LabelFrame(right_frame, text="📷 車輛照片 (380x280)", font=("微軟雅黑", 10, "bold"), bg="white")
+        photo_frame.pack(fill=tk.BOTH, expand=True, pady=(0, 3))
+
+        photo_container = tk.Frame(photo_frame, bg="#f0f0f0", width=380, height=280)
+        photo_container.pack(fill=tk.BOTH, expand=True, padx=3, pady=3)
+        photo_container.pack_propagate(False)
+
+        self.photo_display = tk.Label(photo_container, text="選擇記錄查看照片", font=("微軟雅黑", 10), bg="#e8e8e8", fg="#999", relief=tk.SUNKEN, bd=2)
+        self.photo_display.pack(fill=tk.BOTH, expand=True)
+
+        video_frame = tk.LabelFrame(right_frame, text="🎬 車輛影片 (380x280)", font=("微軟雅黑", 10, "bold"), bg="white")
+        video_frame.pack(fill=tk.BOTH, expand=True, pady=(3, 0))
+
+        video_container = tk.Frame(video_frame, bg="#f0f0f0", width=380, height=280)
+        video_container.pack(fill=tk.BOTH, expand=True, padx=3, pady=3)
+        video_container.pack_propagate(False)
+
+        self.video_display = tk.Label(video_container, text="選擇記錄顯示影片", font=("微軟雅黑", 10), bg="#e8e8e8", fg="#999", relief=tk.SUNKEN, bd=2, cursor="hand2")
+        self.video_display.pack(fill=tk.BOTH, expand=True)
+
+    def on_record_selected(self, event):
+        """選擇記錄時顯示照片和影像"""
+        selection = self.tree.selection()
+        if not selection:
+            return
+
+        item_id = selection[0]
+        values = self.tree.item(item_id)['values']
+
+        time_str = values[1]
+        plate_number = values[2]
+
+        if not plate_number:
+            self.photo_display.config(text="⚠️ 無車號", fg="#f44336", image="")
+            self.video_display.config(text="⚠️ 無車號", fg="#f44336", image="")
+            return
+
+        photo_path = self.importer.find_vehicle_photo(plate_number, time_str)
+        if photo_path:
+            def load_photo():
+                MediaManager.load_and_display_photo(self.photo_display, photo_path)
+            threading.Thread(target=load_photo, daemon=True).start()
+        else:
+            self.photo_display.config(text="📷 照片未找到", fg="#f44336", image="")
+
+        image_path = self.importer.find_vehicle_image(plate_number, time_str)
+        if image_path and os.path.exists(image_path):
+            self.current_video_path = image_path
+            def load_video():
+                MediaManager.load_and_display_video(self.video_display, image_path, play_callback=lambda: self.play_video(image_path))
+            threading.Thread(target=load_video, daemon=True).start()
+        else:
+            self.video_display.config(text="🎬 影片未找到", fg="#f44336", image="")
+
+    def play_video(self, video_path: str):
+        """播放影片"""
+        try:
+            if os.name == 'nt':
+                os.startfile(video_path)
+            elif platform.system() == 'Darwin':
+                subprocess.Popen(['open', video_path])
+            else:
+                subprocess.Popen(['xdg-open', video_path])
+        except Exception as e:
+            messagebox.showerror("錯誤", "無法播放影片: {0}".format(str(e)))
+
+    def import_append(self):
+        """追加匯入"""
+        file_path = filedialog.askopenfilename(title="選擇檔案", filetypes=[("所有格式", "*.xlsx *.xls *.csv"), ("Excel", "*.xlsx *.xls"), ("CSV", "*.csv")])
+        if file_path:
+            self.perform_import(file_path, append_mode=True)
+
+    def import_replace(self):
+        """覆蓋匯入"""
+        file_path = filedialog.askopenfilename(title="選擇檔案", filetypes=[("所有格式", "*.xlsx *.xls *.csv"), ("Excel", "*.xlsx *.xls"), ("CSV", "*.csv")])
+        if file_path and messagebox.askyesno("確認", "確定要覆蓋現有數據嗎？"):
+            self.perform_import(file_path, append_mode=False)
+
+    def perform_import(self, file_path: str, append_mode: bool):
+        """執行匯入"""
+        self.progress_window = ProgressWindow(self.root, "📥 匯入進度")
+        self.importer.set_progress_callback(self.progress_window.update_progress)
+
+        def import_thread():
+            try:
+                success, message, count = self.importer.import_from_file(file_path, append_mode=append_mode)
+                self.root.after(500, lambda: self.progress_window.close())
+                if success:
+                    self.root.after(600, lambda: messagebox.showinfo("成功", message))
+                    self.root.after(600, lambda: self.refresh_table())
+                else:
+                    self.root.after(600, lambda: messagebox.showerror("失敗", message))
+            except Exception as e:
+                self.root.after(500, lambda: self.progress_window.close())
+                self.root.after(600, lambda: messagebox.showerror("錯誤", str(e)))
+
+        threading.Thread(target=import_thread, daemon=True).start()
+
+    def refresh_table(self):
+        """刷新表格"""
+        for item in self.tree.get_children():
+            self.tree.delete(item)
+
+        records = self.importer.get_all_records()
+
+        for record in records:
+            tag = "entry" if record['result'] == "入場" else "no_entry" if record['result'] == "無法入場" else "warning" if record['result'] == "預警" else ""
+            self.tree.insert("", tk.END, values=(record['id'], record['time'], record['plate_number'], record['identity'], record['result'], record['etag']), tags=(tag,))
+
+        self.status_label.config(text="總共 {0} 筆記錄".format(len(records)))
+
+    def search_records(self):
+        """查詢記錄"""
+        plate_number = self.plate_var.get().strip()
+        identity = self.identity_var.get().strip()
+        result = self.result_var.get().strip()
+
+        if not plate_number and not identity and not result:
+            messagebox.showwarning("警告", "請至少選擇一個查詢條件")
+            return
+
+        for item in self.tree.get_children():
+            self.tree.delete(item)
+
+        search_results = self.importer.search_by_conditions(plate_number=plate_number, identity=identity, result=result)
+
+        if not search_results:
+            messagebox.showinfo("查詢結果", "未找到匹配的記錄")
+            self.status_label.config(text="查詢結果: 0 筆記錄")
+            return
+
+        for record in search_results:
+            tag = "entry" if record['result'] == "入場" else "no_entry" if record['result'] == "無法入場" else "warning" if record['result'] == "預警" else ""
+            self.tree.insert("", tk.END, values=(record['id'], record['time'], record['plate_number'], record['identity'], record['result'], record['etag']), tags=(tag,))
+
+        self.status_label.config(text="查詢結果: {0} 筆記錄".format(len(search_results)))
+
+    def clear_search(self):
+        """清空搜索"""
+        self.plate_var.set("")
+        self.identity_var.set("")
+        self.result_var.set("")
+        self.refresh_table()
+
+    def show_statistics(self):
+        """顯示統計"""
+        stats = self.importer.get_statistics()
+
+        if stats['total'] == 0:
+            messagebox.showinfo("統計資訊", "暫無數據")
+            return
+
+        stat_window = StatisticsWindow(self.root, stats, self.importer)
+
+    def export_statistics_pdf(self):
+        """導出統計 PDF"""
+        file_path = filedialog.asksaveasfilename(
+            title="保存統計報表",
+            defaultextension=".pdf",
+            filetypes=[("PDF 文件", "*.pdf")]
+        )
+        if not file_path:
+            return
+
+        if not REPORTLAB_AVAILABLE:
+            messagebox.showerror("錯誤", "缺少 reportlab 庫\n請執行: pip install reportlab")
+            return
+
+        try:
+            test_dir = os.path.dirname(file_path)
+            if test_dir and not os.path.exists(test_dir):
+                os.makedirs(test_dir)
+            if not os.access(test_dir if test_dir else '.', os.W_OK):
+                messagebox.showerror("錯誤", "無寫入權限到: {0}".format(test_dir if test_dir else '當前目錄'))
+                return
+        except Exception as e:
+            messagebox.showerror("錯誤", "路徑檢查失敗: {0}".format(str(e)))
+            return
+
+        stats = self.importer.get_statistics()
+        if stats['total'] == 0:
+            messagebox.showwarning("警告", "暫無數據無法生成報表")
+            return
+
+        success, message = PDFReportGenerator.generate_statistics_report(file_path, stats)
+        if success:
+            messagebox.showinfo("成功", message)
+        else:
+            messagebox.showerror("失敗", message)
+
+    def export_details_pdf(self):
+        """導出詳細 PDF"""
+        file_path = filedialog.asksaveasfilename(
+            title="保存詳細報表",
+            defaultextension=".pdf",
+            filetypes=[("PDF 文件", "*.pdf")]
+        )
+        if not file_path:
+            return
+
+        if not REPORTLAB_AVAILABLE:
+            messagebox.showerror("錯誤", "缺少 reportlab 庫\n請執行: pip install reportlab")
+            return
+
+        try:
+            test_dir = os.path.dirname(file_path)
+            if test_dir and not os.path.exists(test_dir):
+                os.makedirs(test_dir)
+            if not os.access(test_dir if test_dir else '.', os.W_OK):
+                messagebox.showerror("錯誤", "無寫入權限到: {0}".format(test_dir if test_dir else '當前目錄'))
+                return
+        except Exception as e:
+            messagebox.showerror("錯誤", "路徑檢查失敗: {0}".format(str(e)))
+            return
+
+        records = self.importer.get_all_records()
+        if not records:
+            messagebox.showwarning("警告", "暫無數據無法生成報表")
+            return
+
+        success, message = PDFReportGenerator.generate_details_report(file_path, records)
+        if success:
+            messagebox.showinfo("成功", message)
+        else:
+            messagebox.showerror("失敗", message)
+
+
+# ============================================================================
+# 嵌入式視圖（給 launcher 使用）
+# ============================================================================
+
+class VehicleImporterView(ttk.Frame):
+    """給 launcher 嵌入的 Qphoto 頁面"""
+    def __init__(self, parent):
+        super().__init__(parent)
+        host = tk.Frame(self, bg="#f0f0f0")
+        host.pack(fill=tk.BOTH, expand=True)
+        self.app = VehicleImporterGUI(host)
+
+
+# ============================================================================
+# 主程序
+# ============================================================================
 
 def main():
     """主程序入口"""
