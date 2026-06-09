@@ -6,7 +6,7 @@
 車號為空白/NAN/nan/null 的記錄 - 完全忽略不顯示
 支持匯入格式: Excel (.xlsx, .xls) 和 CSV (.csv)
 支持輸出格式: PDF 報表
-統計方式: 相同車牌一天只算一次（按車子數量而非次數）
+統計方式: 相同車牌一天只算一次，相同身份一天只算一次（按車子數量而非次數）
 
 依賴庫：openpyxl, pillow, reportlab
 """
@@ -569,7 +569,7 @@ class VehicleImporter:
         return results
 
     def get_statistics(self, start_date: str = "", end_date: str = "") -> Dict[str, Any]:
-        """獲取統計資訊 - 相同車牌每天只算一次"""
+        """獲取統計資訊 - 相同車牌每天只算一次，相同身份每天只算一次"""
         records_to_analyze = []
         if start_date or end_date:
             for record in self.records:
@@ -592,17 +592,18 @@ class VehicleImporter:
                 "total": 0, "no_entry_total": 0, "entry_total": 0, "warning_total": 0,
                 "no_entry_vehicles": {}, "no_entry_identities": {}, 
                 "entry_vehicles": {}, "entry_identities": {},
+                "warning_identities": {},
                 "date_range": (start_date, end_date)
             }
 
-        # 統計邏輯：相同車牌一天只計算一次
+        # ✅ 修正: 統計邏輯 - 使用集合去除重複 (相同車牌同天只計一次，相同身份同天也只計一次)
         no_entry_vehicles_per_day: Set[Tuple[str, str]] = set()
         entry_vehicles_per_day: Set[Tuple[str, str]] = set()
         warning_vehicles_per_day: Set[Tuple[str, str]] = set()
         
-        no_entry_identities_per_day: Dict[Tuple[str, str], bool] = {}
-        entry_identities_per_day: Dict[Tuple[str, str], bool] = {}
-        warning_identities_per_day: Dict[Tuple[str, str], bool] = {}
+        no_entry_identities_per_day: Set[Tuple[str, str]] = set()      # ✅ 改為 set
+        entry_identities_per_day: Set[Tuple[str, str]] = set()         # ✅ 改為 set
+        warning_identities_per_day: Set[Tuple[str, str]] = set()       # ✅ 改為 set
 
         for record in records_to_analyze:
             try:
@@ -610,22 +611,19 @@ class VehicleImporter:
                 
                 if record.result == "無法入場":
                     no_entry_vehicles_per_day.add((record_date, record.plate_number))
-                    if (record_date, record.identity) not in no_entry_identities_per_day:
-                        no_entry_identities_per_day[(record_date, record.identity)] = True
+                    no_entry_identities_per_day.add((record_date, record.identity))
                         
                 elif record.result == "入場":
                     entry_vehicles_per_day.add((record_date, record.plate_number))
-                    if (record_date, record.identity) not in entry_identities_per_day:
-                        entry_identities_per_day[(record_date, record.identity)] = True
+                    entry_identities_per_day.add((record_date, record.identity))
                         
                 elif record.result == "預警":
                     warning_vehicles_per_day.add((record_date, record.plate_number))
-                    if (record_date, record.identity) not in warning_identities_per_day:
-                        warning_identities_per_day[(record_date, record.identity)] = True
+                    warning_identities_per_day.add((record_date, record.identity))
             except:
                 pass
 
-        # 統計各個身份的計數
+        # ✅ 統計各個身份的計數 (相同身份同天去重)
         no_entry_identities = defaultdict(int)
         entry_identities = defaultdict(int)
         warning_identities = defaultdict(int)
@@ -1134,7 +1132,7 @@ class StatisticsWindow(tk.Toplevel):
         """構建統計 UI"""
         title = tk.Label(
             self,
-            text="📊 統計資訊 (相同車牌每天只算一次)",
+            text="📊 統計資訊 (相同車牌每天只算一次，相同身份每天只算一次)",
             font=("微軟雅黑", 16, "bold"),
             bg="white",
             fg="#333"
