@@ -1,0 +1,48 @@
+# 數據文件
+vehicle_data.json
+
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+.Python
+build/
+develop-eggs/
+dist/
+downloads/
+eggs/
+.eggs/
+lib/
+lib64/
+parts/
+sdist/
+var/
+wheels/
+*.egg-info/
+.installed.cfg
+*.egg
+
+# 虛擬環境
+venv/
+ENV/
+env/
+.venv
+
+# IDE
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+.DS_Store
+
+# 臨時文件
+*.tmp
+*.temp
+*.log
+
+# 媒體緩存
+*.jpg
+*.png
+*.mp4
